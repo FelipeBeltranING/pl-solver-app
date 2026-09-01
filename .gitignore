@@ -1,0 +1,26 @@
+# Entorno virtual
+venv/
+env/
+.venv/
+
+# Archivos compilados de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribución / empaquetado
+build/
+dist/
+*.egg-info/
+
+# Configuración de VSCode (opcional, quita esta línea si quieres versionarla)
+.vscode/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Logs y archivos temporales
+*.log
+*.tmp
