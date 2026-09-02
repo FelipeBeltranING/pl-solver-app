@@ -14,6 +14,24 @@ from modelos.datos import Restriccion, ProblemaPL
 from utils.validaciones import validar_para_grafico, validar_para_simplex
 
 
+def _crear_entry_numerico(parent, width=5, valor_por_defecto="0"):
+    entry = tk.Entry(parent, width=width)
+    entry.insert(0, valor_por_defecto)
+
+    def al_ganar_foco(evento):
+        if entry.get() == valor_por_defecto:
+            entry.delete(0, tk.END)
+
+    def al_perder_foco(evento):
+        if entry.get().strip() == "":
+            entry.insert(0, valor_por_defecto)
+
+    entry.bind("<FocusIn>", al_ganar_foco)
+    entry.bind("<FocusOut>", al_perder_foco)
+
+    return entry
+
+
 class VentanaDatos(tk.Toplevel):
     def __init__(self, ventana_anterior, tipo_optimizacion, num_variables, num_restricciones):
         super().__init__(ventana_anterior)
@@ -44,9 +62,8 @@ class VentanaDatos(tk.Toplevel):
         frame_fo = tk.Frame(self)
         frame_fo.pack()
         for i in range(self.num_variables):
-            entry = tk.Entry(frame_fo, width=5)
+            entry = _crear_entry_numerico(frame_fo)
             entry.pack(side="left", padx=2)
-            entry.insert(0, "0")
             self.entries_funcion_objetivo.append(entry)
             texto = f"x{i+1}" + (" +" if i < self.num_variables - 1 else "")
             tk.Label(frame_fo, text=texto).pack(side="left", padx=2)
@@ -74,9 +91,8 @@ class VentanaDatos(tk.Toplevel):
 
             entries_coef = []
             for i in range(self.num_variables):
-                entry = tk.Entry(fila_frame, width=5)
+                entry = _crear_entry_numerico(fila_frame)
                 entry.pack(side="left", padx=2)
-                entry.insert(0, "0")
                 entries_coef.append(entry)
                 texto = f"x{i+1}" + (" +" if i < self.num_variables - 1 else "")
                 tk.Label(fila_frame, text=texto).pack(side="left", padx=2)
@@ -84,9 +100,8 @@ class VentanaDatos(tk.Toplevel):
             combo_operador = tk.StringVar(value="<=")
             tk.OptionMenu(fila_frame, combo_operador, "<=", ">=", "=").pack(side="left", padx=5)
 
-            entry_ld = tk.Entry(fila_frame, width=5)
+            entry_ld = _crear_entry_numerico(fila_frame)
             entry_ld.pack(side="left", padx=2)
-            entry_ld.insert(0, "0")
 
             self.entries_restricciones.append((entries_coef, entry_ld, combo_operador))
 
