@@ -1,8 +1,9 @@
 """
 Ventana de resultados del método simplex (Pantalla de resultado).
 
-Muestra la tabla de cada iteración del método simplex y la solución final
-(valores de las variables de decisión y valor óptimo de Z).
+Muestra la tabla de cada iteración del método simplex, una descripción en
+texto de lo que ocurrió en ese paso, y la solución final (valores de las
+variables de decisión y valor óptimo de Z).
 """
 
 import tkinter as tk
@@ -15,7 +16,8 @@ class VentanaSimplex(tk.Toplevel):
     def __init__(self, ventana_anterior, problema):
         super().__init__(ventana_anterior)
         self.title("Resultado - Método Simplex")
-        self.geometry("700x600")
+        self.geometry("750x650")
+        self.minsize(650, 500)
 
         try:
             self.resultado = resolver_metodo_simplex(problema)
@@ -39,17 +41,60 @@ class VentanaSimplex(tk.Toplevel):
             font=("Arial", 12, "bold")
         ).pack(pady=(0, 10))
 
-        # Pestañas: una por cada iteración
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        # Panel dividido: tabla arriba, descripción del paso abajo.
+        # Así se aprovecha el espacio que antes quedaba en blanco.
+        panel = tk.PanedWindow(self, orient="vertical", sashrelief="raised")
+        panel.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        notebook = ttk.Notebook(panel)
+        panel.add(notebook, stretch="always", height=280)
+
+        frame_descripcion = tk.LabelFrame(panel, text="Explicación del paso", padx=10, pady=10)
+        panel.add(frame_descripcion, stretch="always", height=200)
+
+        self.texto_descripcion = tk.Text(
+            frame_descripcion, wrap="word", font=("Arial", 10),
+            state="disabled", relief="flat", bg=self.cget("bg")
+        )
+        self.texto_descripcion.pack(fill="both", expand=True)
 
         nombres_columnas = self.resultado["nombres_columnas"]
+        descripciones = self.resultado["descripciones"]
 
         for indice, tabla in enumerate(self.resultado["iteraciones"]):
             etiqueta = "Tabla inicial" if indice == 0 else f"Iteración {indice}"
             frame_tab = tk.Frame(notebook)
             notebook.add(frame_tab, text=etiqueta)
             self._dibujar_tabla(frame_tab, tabla, nombres_columnas)
+
+        # Al cambiar de pestaña, actualizar el texto de explicación correspondiente
+        notebook.bind(
+            "<<NotebookTabChanged>>",
+            lambda evento: self._mostrar_descripcion(
+                descripciones, notebook.index(notebook.select())
+            )
+        )
+
+        # Mostrar la descripción de la tabla inicial de una vez,
+        # y agregar la explicación final de la solución al terminar.
+        self._descripciones_completas = descripciones
+        self._mostrar_descripcion(descripciones, 0)
+
+    def _mostrar_descripcion(self, descripciones, indice_tabla):
+        """
+        Muestra en el panel de texto la explicación correspondiente a la
+        pestaña seleccionada. La última descripción (solución final) se
+        añade siempre después de la explicación del último paso.
+        """
+        texto = descripciones[indice_tabla]
+        es_ultima_tabla = indice_tabla == len(descripciones) - 2
+        if es_ultima_tabla:
+            texto += "\n\n" + descripciones[-1]
+
+        self.texto_descripcion.config(state="normal")
+        self.texto_descripcion.delete("1.0", tk.END)
+        self.texto_descripcion.insert("1.0", texto)
+        self.texto_descripcion.config(state="disabled")
 
     def _dibujar_tabla(self, frame, tabla, nombres_columnas):
         tree = ttk.Treeview(frame, columns=nombres_columnas, show="headings", height=8)
