@@ -1,114 +1,107 @@
 """
-Lógica del método gráfico para resolver problemas de programación lineal
-de 2 variables de decisión (x1, x2).
+Lógica del método gráfico (problemas de 2 variables: x1, x2).
 
-Algoritmo:
-1. Calcular los puntos de intersección entre cada par de restricciones
-   (y con los ejes x1=0, x2=0), que son los candidatos a vértices.
-2. Filtrar los que cumplen TODAS las restricciones (región factible).
-3. Evaluar la función objetivo en cada vértice factible.
-4. Elegir el mejor según se maximice o minimice.
+Así se resuelve, en el mismo orden en que se hace a mano en papel:
+  1. Se calculan los puntos donde se cruzan cada par de rectas
+     (las restricciones y los ejes x1=0, x2=0).
+  2. De esos cruces, se descartan los que no cumplen alguna restricción.
+     Los que sobreviven son los vértices de la región factible.
+  3. Se calcula el valor de la función objetivo Z en cada vértice.
+  4. Se elige el vértice con mejor Z (el mayor si es maximizar,
+     el menor si es minimizar).
 """
 
-from itertools import combinations
+from modelos.datos import Restriccion
 
 
-def _evaluar_restriccion(restriccion, punto, tolerancia=1e-6):
-    """Verifica si un punto (x1, x2) cumple una restricción dada."""
-    valor = restriccion.coeficientes[0] * punto[0] + restriccion.coeficientes[1] * punto[1]
-    if restriccion.operador == "<=":
-        return valor <= restriccion.termino_independiente + tolerancia
-    elif restriccion.operador == ">=":
-        return valor >= restriccion.termino_independiente - tolerancia
-    else:  # "="
-        return abs(valor - restriccion.termino_independiente) <= tolerancia
-
-
-def _interseccion(r1, r2):
+def resolver_metodo_grafico(problema):
     """
-    Calcula el punto de intersección entre dos rectas a1*x1 + b1*x2 = c1
-    y a2*x1 + b2*x2 = c2. Devuelve None si son paralelas (sin solución única).
+    Resuelve un problema de programación lineal de 2 variables.
+    Devuelve un diccionario con la región factible, el punto óptimo y su valor de Z.
     """
+    # Agregamos los ejes x1=0 y x2=0 como si fueran restricciones más,
+    # porque las variables de decisión no pueden ser negativas.
+    rectas = list(problema.restricciones)
+    rectas.append(Restriccion([1, 0], "=", 0))  # eje x1 = 0
+    rectas.append(Restriccion([0, 1], "=", 0))  # eje x2 = 0
+
+    # Paso 1: calcular el cruce entre cada par de rectas
+    cruces = []
+    for i in range(len(rectas)):
+        for j in range(i + 1, len(rectas)):
+            punto = _cruce_de_dos_rectas(rectas[i], rectas[j])
+            if punto is not None:
+                cruces.append(punto)
+
+    # Paso 2: quedarnos solo con los puntos que cumplen TODAS las
+    # restricciones originales (esos son los vértices de la región factible)
+    vertices = []
+    for punto in cruces:
+        x1, x2 = punto
+        if x1 < -1e-6 or x2 < -1e-6:
+            continue  # no puede haber valores negativos
+        if all(_cumple_restriccion(r, punto) for r in problema.restricciones):
+            vertices.append(punto)
+
+    vertices = _quitar_puntos_repetidos(vertices)
+
+    if not vertices:
+        raise ValueError("No existe una región factible para este problema.")
+
+    # Pasos 3 y 4: evaluar Z en cada vértice y quedarnos con el mejor
+    mejor_punto, mejor_valor = vertices[0], _evaluar_z(problema, vertices[0])
+    for punto in vertices[1:]:
+        valor = _evaluar_z(problema, punto)
+        if problema.tipo_optimizacion == "max" and valor > mejor_valor:
+            mejor_punto, mejor_valor = punto, valor
+        elif problema.tipo_optimizacion == "min" and valor < mejor_valor:
+            mejor_punto, mejor_valor = punto, valor
+
+    return {
+        "region_factible": vertices,
+        "punto_optimo": mejor_punto,
+        "valor_optimo": mejor_valor,
+    }
+
+
+def _cruce_de_dos_rectas(r1, r2):
+    """Calcula dónde se cruzan dos rectas a1*x1 + b1*x2 = c1 y a2*x1 + b2*x2 = c2."""
     a1, b1 = r1.coeficientes
     c1 = r1.termino_independiente
     a2, b2 = r2.coeficientes
     c2 = r2.termino_independiente
 
-    determinante = a1 * b2 - a2 * b1
-    if abs(determinante) < 1e-9:
-        return None  # rectas paralelas, no hay intersección única
+    denominador = a1 * b2 - a2 * b1
+    if abs(denominador) < 1e-9:
+        return None  # rectas paralelas: no se cruzan en un solo punto
 
-    x1 = (c1 * b2 - c2 * b1) / determinante
-    x2 = (a1 * c2 - a2 * c1) / determinante
+    x1 = (c1 * b2 - c2 * b1) / denominador
+    x2 = (a1 * c2 - a2 * c1) / denominador
     return (x1, x2)
 
 
-def calcular_region_factible(problema):
-    """
-    Calcula los vértices de la región factible de un problema de 2 variables.
-    Devuelve una lista de puntos (x1, x2) que son factibles.
-    """
-    from modelos.datos import Restriccion
-
-    eje_x1 = Restriccion([1, 0], "=", 0)  # x1 = 0
-    eje_x2 = Restriccion([0, 1], "=", 0)  # x2 = 0
-
-    todas_las_rectas = list(problema.restricciones) + [eje_x1, eje_x2]
-
-    candidatos = []
-    for r1, r2 in combinations(todas_las_rectas, 2):
-        punto = _interseccion(r1, r2)
-        if punto is not None:
-            candidatos.append(punto)
-
-    vertices_factibles = []
-    for punto in candidatos:
-        x1, x2 = punto
-        if x1 < -1e-6 or x2 < -1e-6:
-            continue
-        if all(_evaluar_restriccion(r, punto) for r in problema.restricciones):
-            vertices_factibles.append(punto)
-
-    vertices_unicos = []
-    for punto in vertices_factibles:
-        if not any(
-            abs(punto[0] - v[0]) < 1e-6 and abs(punto[1] - v[1]) < 1e-6
-            for v in vertices_unicos
-        ):
-            vertices_unicos.append(punto)
-
-    return vertices_unicos
+def _cumple_restriccion(restriccion, punto):
+    """Revisa si el punto (x1, x2) cumple una restricción dada."""
+    valor = restriccion.coeficientes[0] * punto[0] + restriccion.coeficientes[1] * punto[1]
+    tolerancia = 1e-6
+    if restriccion.operador == "<=":
+        return valor <= restriccion.termino_independiente + tolerancia
+    if restriccion.operador == ">=":
+        return valor >= restriccion.termino_independiente - tolerancia
+    return abs(valor - restriccion.termino_independiente) <= tolerancia
 
 
-def evaluar_funcion_objetivo(problema, punto):
-    """Evalúa Z = c1*x1 + c2*x2 en un punto dado."""
+def _evaluar_z(problema, punto):
+    """Calcula Z = c1*x1 + c2*x2 en un punto dado."""
     c1, c2 = problema.funcion_objetivo
     return c1 * punto[0] + c2 * punto[1]
 
 
-def resolver_metodo_grafico(problema):
-    """
-    Resuelve el problema por método gráfico.
-    Devuelve un diccionario con:
-      - region_factible: lista de vértices (x1, x2)
-      - punto_optimo: (x1, x2) del mejor vértice
-      - valor_optimo: valor de Z en el punto óptimo
-    Lanza ValueError si no hay región factible.
-    """
-    vertices = calcular_region_factible(problema)
-
-    if not vertices:
-        raise ValueError("No existe una región factible para este problema.")
-
-    valores = [(punto, evaluar_funcion_objetivo(problema, punto)) for punto in vertices]
-
-    if problema.tipo_optimizacion == "max":
-        punto_optimo, valor_optimo = max(valores, key=lambda item: item[1])
-    else:
-        punto_optimo, valor_optimo = min(valores, key=lambda item: item[1])
-
-    return {
-        "region_factible": vertices,
-        "punto_optimo": punto_optimo,
-        "valor_optimo": valor_optimo,
-    }
+def _quitar_puntos_repetidos(puntos):
+    """Elimina puntos duplicados que pueden aparecer por redondeo."""
+    unicos = []
+    for p in puntos:
+        repetido = any(abs(p[0] - u[0]) < 1e-6 and abs(p[1] - u[1]) < 1e-6 for u in unicos)
+        if not repetido:
+            unicos.append(p)
+    return unicos
