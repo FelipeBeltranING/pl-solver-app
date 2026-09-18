@@ -1,10 +1,14 @@
 """
-Resolvedor de Programación Lineal - Método Gráfico y Método Simplex
+Resolvedor de Programación Lineal - Método Gráfico, Simplex y Gran M
 =====================================================================
 Aplicación de escritorio en Python (Tkinter + Matplotlib) para resolver
 problemas de programación lineal:
   - Método gráfico: 2 variables de decisión, maximización o minimización.
   - Método simplex: solo maximización, restricciones "<=".
+  - Método Gran M: maximización o minimización, restricciones "<=", ">=" o "=".
+    Es el método más general: agrega variables artificiales "castigadas"
+    con un costo muy alto (M) para poder resolver cualquier combinación
+    de restricciones.
 
 Este archivo contiene toda la aplicación en un solo módulo (entregable).
 Está organizado en las mismas secciones que el proyecto original en
@@ -14,8 +18,9 @@ varios archivos, para que sea fácil de ubicar y explicar:
   2. VALIDACIONES          -> reglas para habilitar cada método
   3. LÓGICA MÉTODO GRÁFICO -> cálculo de región factible y óptimo
   4. LÓGICA MÉTODO SIMPLEX -> tabla simplex e iteraciones
-  5. INTERFAZ GRÁFICA      -> las 4 ventanas de la aplicación
-  6. PUNTO DE ENTRADA      -> arranque de la app
+  5. LÓGICA MÉTODO GRAN M  -> tabla con variables artificiales e iteraciones
+  6. INTERFAZ GRÁFICA      -> las ventanas de la aplicación
+  7. PUNTO DE ENTRADA      -> arranque de la app
 """
 
 import tkinter as tk
@@ -81,12 +86,13 @@ class ProblemaPL:
 # =====================================================================
 # 2. VALIDACIONES
 # =====================================================================
-# El usuario elige el método (gráfico o simplex) desde la interfaz;
-# estas funciones validan si esa elección es válida según las
-# dimensiones del problema ingresado.
+# El usuario elige el método (gráfico, simplex o Gran M) desde la
+# interfaz; estas funciones validan si esa elección es válida según las
+# características del problema ingresado.
 
 GRAFICO = "grafico"
 SIMPLEX = "simplex"
+GRAN_M = "gran_m"
 
 
 def validar_para_grafico(problema):
@@ -108,6 +114,19 @@ def validar_para_simplex(problema):
         return False, "El método simplex en esta aplicación solo admite maximización."
     if problema.num_restricciones < 2:
         return False, "El método simplex requiere al menos 2 restricciones."
+    return True, ""
+
+
+def validar_para_gran_m(problema):
+    """
+    Valida que el problema cumpla los requisitos del método Gran M.
+    Es el método más general de la aplicación: admite maximizar o
+    minimizar, y restricciones "<=", ">=" o "=", así que solo se exige
+    que haya al menos una restricción.
+    Devuelve (True, "") si es válido, o (False, mensaje_error) si no.
+    """
+    if problema.num_restricciones < 1:
+        return False, "El método Gran M requiere al menos 1 restricción."
     return True, ""
 
 
@@ -328,7 +347,183 @@ def _copiar(tabla):
 
 
 # =====================================================================
-# 5. INTERFAZ GRÁFICA
+# 5. LÓGICA MÉTODO GRAN M
+# =====================================================================
+# Este método admite maximizar o minimizar, y restricciones "<=", ">="
+# o "=". La idea es:
+#   - "<="  -> se agrega una variable de holgura (costo 0)
+#   - ">="  -> se agrega una variable de exceso (costo 0) y una
+#              variable artificial (costo -M)
+#   - "="   -> solo se agrega una variable artificial (costo -M)
+# Las variables artificiales no tienen significado real: solo sirven
+# para poder armar una base inicial (matriz identidad) y se "castigan"
+# con un costo enorme (M) para que el propio método las saque de la
+# base apenas pueda.
+#
+# Si el problema es de minimizar, se resuelve internamente como si
+# fuera de maximizar la función objetivo con el signo cambiado, y al
+# final se vuelve a invertir el signo de Z (las variables x no cambian).
+#
+# Pasos: (1) decidir qué variables adicionales necesita cada
+# restricción, (2) armar la tabla inicial y su fila Z (como Zj - Cj),
+# (3) iterar con las mismas reglas del simplex normal (se reutilizan
+# _fila_con_menor_razon, _pivotear y _copiar), (4) revisar que ninguna
+# variable artificial haya quedado en la base, (5) leer la solución.
+
+VALOR_M_POR_DEFECTO = 1_000_000  # "M": número muy grande usado como castigo
+
+
+def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteraciones=50):
+    """
+    Resuelve un problema de programación lineal (maximizar o minimizar),
+    con restricciones "<=", ">=" o "=", usando el método de la Gran M.
+    Devuelve un diccionario con las tablas de cada paso (junto con la
+    base y el costo de cada fila, para poder mostrar Cj/Cb/Zj), su
+    explicación, y la solución óptima final.
+    """
+    num_vars = problema.num_variables
+    num_restricciones = problema.num_restricciones
+
+    # Si el problema es de minimizar, lo resolvemos como si fuera de
+    # maximizar la función objetivo contraria; al final se invierte Z.
+    es_minimizacion = problema.tipo_optimizacion == "min"
+    funcion_objetivo_max = (
+        [-c for c in problema.funcion_objetivo] if es_minimizacion
+        else list(problema.funcion_objetivo)
+    )
+
+    # Paso 1: decidir las columnas adicionales (holgura/exceso/artificial)
+    # que necesita cada restricción, y cuál es su variable básica inicial.
+    nombres_columnas_extra = []
+    costos_extra = []
+    variables_basicas = []
+    columnas_por_restriccion = []  # una entrada por restricción: {nombre_columna: valor}
+
+    for i, restriccion in enumerate(problema.restricciones):
+        if restriccion.termino_independiente < 0:
+            raise ValueError("El término independiente de cada restricción debe ser >= 0.")
+
+        columnas_de_esta_restriccion = {}
+
+        if restriccion.operador == "<=":
+            nombre_holgura = f"s{i+1}"
+            nombres_columnas_extra.append(nombre_holgura)
+            costos_extra.append(0)
+            columnas_de_esta_restriccion[nombre_holgura] = 1
+            variables_basicas.append(nombre_holgura)
+
+        elif restriccion.operador == ">=":
+            nombre_exceso = f"e{i+1}"
+            nombre_artificial = f"a{i+1}"
+            nombres_columnas_extra.append(nombre_exceso)
+            costos_extra.append(0)
+            columnas_de_esta_restriccion[nombre_exceso] = -1
+            nombres_columnas_extra.append(nombre_artificial)
+            costos_extra.append(-valor_m)
+            columnas_de_esta_restriccion[nombre_artificial] = 1
+            variables_basicas.append(nombre_artificial)
+
+        else:  # "="
+            nombre_artificial = f"a{i+1}"
+            nombres_columnas_extra.append(nombre_artificial)
+            costos_extra.append(-valor_m)
+            columnas_de_esta_restriccion[nombre_artificial] = 1
+            variables_basicas.append(nombre_artificial)
+
+        columnas_por_restriccion.append(columnas_de_esta_restriccion)
+
+    nombres_columnas = [f"x{i+1}" for i in range(num_vars)] + nombres_columnas_extra + ["LD"]
+    costos_columnas = list(funcion_objetivo_max) + costos_extra  # sin contar "LD"
+
+    # Paso 2: armar la tabla inicial (una fila por restricción)
+    tabla = []
+    for i, restriccion in enumerate(problema.restricciones):
+        fila = list(restriccion.coeficientes)
+        for nombre in nombres_columnas_extra:
+            fila.append(columnas_por_restriccion[i].get(nombre, 0))
+        fila.append(restriccion.termino_independiente)
+        tabla.append(fila)
+
+    # Paso 3: calcular la fila Z inicial como Zj - Cj (misma convención que
+    # el método simplex normal), usando el costo real de la base inicial
+    # (0 para holgura/exceso, -M para las variables artificiales).
+    costos_por_nombre = dict(zip(nombres_columnas[:-1], costos_columnas))
+    costos_basicos = [costos_por_nombre[variable] for variable in variables_basicas]
+    num_columnas_variables = len(nombres_columnas) - 1  # sin contar "LD"
+
+    fila_z = []
+    for j in range(num_columnas_variables):
+        zj = sum(costos_basicos[i] * tabla[i][j] for i in range(num_restricciones))
+        fila_z.append(zj - costos_columnas[j])
+    zj_ld = sum(costos_basicos[i] * tabla[i][-1] for i in range(num_restricciones))
+    fila_z.append(zj_ld)
+    tabla.append(fila_z)
+
+    iteraciones = [_copiar(tabla)]
+    bases_por_iteracion = [list(variables_basicas)]
+    descripciones = [
+        f"Tabla inicial: se agregaron variables de holgura, exceso y/o "
+        f"artificiales según cada restricción (M = {valor_m:,}). "
+        f"La base inicial es: {', '.join(variables_basicas)}."
+    ]
+
+    # Paso 4: iterar con las mismas reglas del simplex normal
+    contador = 0
+    while any(v < -1e-6 for v in tabla[-1][:-1]):
+        contador += 1
+        if contador > max_iteraciones:
+            raise ValueError("Se alcanzó el máximo de iteraciones sin encontrar el óptimo.")
+
+        columna = tabla[-1][:-1].index(min(tabla[-1][:-1]))
+        fila = _fila_con_menor_razon(tabla, columna)
+        if fila is None:
+            raise ValueError("El problema es no acotado (no tiene solución óptima finita).")
+
+        entra, sale = nombres_columnas[columna], variables_basicas[fila]
+        variables_basicas[fila] = entra
+        _pivotear(tabla, fila, columna)
+
+        iteraciones.append(_copiar(tabla))
+        bases_por_iteracion.append(list(variables_basicas))
+        descripciones.append(f"Iteración {contador}: entra {entra} a la base, sale {sale}.")
+
+    # Paso 5: si alguna variable artificial quedó en la base con un valor
+    # mayor a cero, el problema original no tiene solución factible.
+    for i, variable in enumerate(variables_basicas):
+        if variable.startswith("a") and abs(tabla[i][-1]) > 1e-6:
+            raise ValueError(
+                "El problema no tiene solución factible: la variable artificial "
+                f"'{variable}' quedó en la base con un valor mayor a cero."
+            )
+
+    # Paso 6: leer la solución final desde la tabla
+    solucion = {f"x{i+1}": 0 for i in range(num_vars)}
+    for i, variable in enumerate(variables_basicas):
+        if variable in solucion:
+            solucion[variable] = tabla[i][-1]
+
+    valor_optimo = tabla[-1][-1]
+    if es_minimizacion:
+        valor_optimo = -valor_optimo  # se deshace el cambio de signo del inicio
+
+    texto_solucion = ", ".join(f"{v}={val:.2f}" for v, val in solucion.items())
+    descripciones.append(f"Solución óptima: {texto_solucion}, con Z = {valor_optimo:.2f}.")
+
+    return {
+        "iteraciones": iteraciones,
+        "bases_por_iteracion": bases_por_iteracion,
+        "descripciones": descripciones,
+        "nombres_columnas": nombres_columnas,
+        "costos_columnas": costos_columnas,
+        "costos_por_nombre": costos_por_nombre,
+        "solucion": solucion,
+        "valor_optimo": valor_optimo,
+        "valor_m": valor_m,
+    }
+
+
+# =====================================================================
+# 6. INTERFAZ GRÁFICA
 # =====================================================================
 
 class VentanaPrincipal(tk.Tk):
@@ -348,7 +543,7 @@ class VentanaPrincipal(tk.Tk):
             self, text="Resolvedor de Programación Lineal",
             font=("Arial", 14, "bold")
         ).pack(pady=(15, 0))
-        tk.Label(self, text="Método Gráfico y Simplex").pack(pady=(0, 15))
+        tk.Label(self, text="Método Gráfico, Simplex y Gran M").pack(pady=(0, 15))
 
         tk.Label(self, text="Seleccione maximizar o minimizar").pack(pady=(5, 5))
         frame_tipo = tk.Frame(self)
@@ -455,7 +650,7 @@ class VentanaDatos(tk.Toplevel):
             self, text="Resolvedor de Programación Lineal",
             font=("Arial", 13, "bold")
         ).pack(pady=(10, 0))
-        tk.Label(self, text="Método Gráfico y Simplex").pack(pady=(0, 10))
+        tk.Label(self, text="Método Gráfico, Simplex y Gran M").pack(pady=(0, 10))
 
         # --- Función objetivo ---
         tk.Label(self, text="Función objetivo", font=("Arial", 11, "bold")).pack(pady=(10, 5))
@@ -513,16 +708,22 @@ class VentanaDatos(tk.Toplevel):
         frame_metodos.pack()
 
         self.boton_grafico = tk.Button(
-            frame_metodos, text="Gráfico", width=15,
-            command=lambda: self._resolver("grafico")
+            frame_metodos, text="Gráfico", width=13,
+            command=lambda: self._resolver(GRAFICO)
         )
-        self.boton_grafico.pack(side="left", padx=10)
+        self.boton_grafico.pack(side="left", padx=8)
 
         self.boton_simplex = tk.Button(
-            frame_metodos, text="Simplex", width=15,
-            command=lambda: self._resolver("simplex")
+            frame_metodos, text="Simplex", width=13,
+            command=lambda: self._resolver(SIMPLEX)
         )
-        self.boton_simplex.pack(side="left", padx=10)
+        self.boton_simplex.pack(side="left", padx=8)
+
+        self.boton_gran_m = tk.Button(
+            frame_metodos, text="Gran M", width=13,
+            command=lambda: self._resolver(GRAN_M)
+        )
+        self.boton_gran_m.pack(side="left", padx=8)
 
         self._actualizar_disponibilidad_metodos()
 
@@ -558,9 +759,11 @@ class VentanaDatos(tk.Toplevel):
         # Validación de dimensiones (no requiere los valores de los campos)
         grafico_valido = self.num_variables == 2
         simplex_valido = self.tipo_optimizacion == "max" and self.num_restricciones >= 2
+        gran_m_valido = self.num_restricciones >= 1
 
         self.boton_grafico.config(state="normal" if grafico_valido else "disabled")
         self.boton_simplex.config(state="normal" if simplex_valido else "disabled")
+        self.boton_gran_m.config(state="normal" if gran_m_valido else "disabled")
 
     def _resolver(self, metodo):
         try:
@@ -569,18 +772,23 @@ class VentanaDatos(tk.Toplevel):
             messagebox.showerror("Error en los datos", str(error))
             return
 
-        if metodo == "grafico":
+        if metodo == GRAFICO:
             es_valido, mensaje = validar_para_grafico(problema)
-        else:
+        elif metodo == SIMPLEX:
             es_valido, mensaje = validar_para_simplex(problema)
+        else:
+            es_valido, mensaje = validar_para_gran_m(problema)
 
         if not es_valido:
             messagebox.showerror("Método no aplicable", mensaje)
             return
-        if metodo == "grafico":
+
+        if metodo == GRAFICO:
             ventana_resultado = VentanaGrafico(self, problema)
-        else:
+        elif metodo == SIMPLEX:
             ventana_resultado = VentanaSimplex(self, problema)
+        else:
+            ventana_resultado = VentanaGranM(self, problema)
 
         ventana_resultado.grab_set()
 
@@ -763,8 +971,153 @@ class VentanaSimplex(tk.Toplevel):
         tree.pack(fill="both", expand=True, padx=5, pady=5)
 
 
+class VentanaGranM(tk.Toplevel):
+    """
+    Ventana de resultado del método Gran M. Es muy parecida a
+    VentanaSimplex (mismo panel dividido: tabla arriba, explicación
+    abajo), pero la tabla se dibuja con columnas extra ("Base" y "Cb")
+    y con la fila "Cj" al inicio y las filas "Zj" / "Cj - Zj" al final,
+    para que se vea el detalle clásico del método Gran M.
+    """
+
+    def __init__(self, ventana_anterior, problema):
+        super().__init__(ventana_anterior)
+        self.title("Resultado - Método Gran M")
+        self.geometry("850x680")
+        self.minsize(700, 520)
+
+        try:
+            self.resultado = resolver_metodo_gran_m(problema)
+        except ValueError as error:
+            tk.Label(self, text=f"Error: {error}", fg="red", wraplength=700).pack(pady=20)
+            return
+
+        self._mostrar_resultado()
+
+    def _mostrar_resultado(self):
+        solucion = self.resultado["solucion"]
+        valor_optimo = self.resultado["valor_optimo"]
+        valor_m = self.resultado["valor_m"]
+
+        texto_solucion = ", ".join(f"{var}={valor:.2f}" for var, valor in solucion.items())
+        tk.Label(
+            self, text=f"Solución óptima: {texto_solucion}",
+            font=("Arial", 12, "bold")
+        ).pack(pady=(10, 0))
+        tk.Label(
+            self, text=f"Valor óptimo Z = {valor_optimo:.2f}   (M = {valor_m:,})",
+            font=("Arial", 12, "bold")
+        ).pack(pady=(0, 10))
+
+        # Mismo panel dividido que en VentanaSimplex: tabla arriba, explicación abajo.
+        panel = tk.PanedWindow(self, orient="vertical", sashrelief="raised")
+        panel.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        notebook = ttk.Notebook(panel)
+        panel.add(notebook, stretch="always", height=320)
+
+        frame_descripcion = tk.LabelFrame(panel, text="Explicación del paso", padx=10, pady=10)
+        panel.add(frame_descripcion, stretch="always", height=180)
+
+        self.texto_descripcion = tk.Text(
+            frame_descripcion, wrap="word", font=("Arial", 10),
+            state="disabled", relief="flat", bg=self.cget("bg")
+        )
+        self.texto_descripcion.pack(fill="both", expand=True)
+
+        nombres_columnas = self.resultado["nombres_columnas"]
+        costos_columnas = self.resultado["costos_columnas"]
+        costos_por_nombre = self.resultado["costos_por_nombre"]
+        descripciones = self.resultado["descripciones"]
+        iteraciones = self.resultado["iteraciones"]
+        bases_por_iteracion = self.resultado["bases_por_iteracion"]
+
+        for indice, tabla in enumerate(iteraciones):
+            etiqueta = "Tabla inicial" if indice == 0 else f"Iteración {indice}"
+            frame_tab = tk.Frame(notebook)
+            notebook.add(frame_tab, text=etiqueta)
+            self._dibujar_tabla_gran_m(
+                frame_tab, tabla, bases_por_iteracion[indice],
+                nombres_columnas, costos_columnas, costos_por_nombre
+            )
+
+        notebook.bind(
+            "<<NotebookTabChanged>>",
+            lambda evento: self._mostrar_descripcion(
+                descripciones, notebook.index(notebook.select())
+            )
+        )
+
+        self._descripciones_completas = descripciones
+        self._mostrar_descripcion(descripciones, 0)
+
+    def _mostrar_descripcion(self, descripciones, indice_tabla):
+        """Igual que en VentanaSimplex: muestra la explicación del paso seleccionado."""
+        texto = descripciones[indice_tabla]
+        es_ultima_tabla = indice_tabla == len(descripciones) - 2
+        if es_ultima_tabla:
+            texto += "\n\n" + descripciones[-1]
+
+        self.texto_descripcion.config(state="normal")
+        self.texto_descripcion.delete("1.0", tk.END)
+        self.texto_descripcion.insert("1.0", texto)
+        self.texto_descripcion.config(state="disabled")
+
+    def _dibujar_tabla_gran_m(self, frame, tabla, variables_basicas,
+                               nombres_columnas, costos_columnas, costos_por_nombre):
+        """
+        Dibuja la tabla de una iteración con el detalle clásico del método
+        Gran M: columnas "Base" y "Cb" al inicio, luego las columnas de
+        variables (x, holgura, exceso, artificiales) y "LD", y como filas:
+        Cj (arriba), una fila por restricción (con su Base y Cb), y al
+        final Zj y Cj - Zj.
+        """
+        columnas_tree = ["Base", "Cb"] + nombres_columnas
+        tree = ttk.Treeview(frame, columns=columnas_tree, show="headings", height=10)
+        for nombre in columnas_tree:
+            tree.heading(nombre, text=nombre)
+            tree.column(nombre, width=55, anchor="center")
+
+        num_columnas_variables = len(nombres_columnas) - 1  # sin contar "LD"
+
+        # Fila "Cj": el costo de cada variable, arriba de todo (como en el
+        # tablero clásico de libro).
+        fila_cj = ["", "Cj"] + [f"{costo:.0f}" for costo in costos_columnas] + [""]
+        tree.insert("", "end", values=fila_cj, tags=("cj",))
+
+        # Una fila por restricción: nombre de la variable básica, su costo,
+        # y los valores actuales de la tabla.
+        for i, variable_basica in enumerate(variables_basicas):
+            costo_basico = costos_por_nombre[variable_basica]
+            valores_fila = [f"{valor:.2f}" for valor in tabla[i]]
+            fila = [variable_basica, f"{costo_basico:.0f}"] + valores_fila
+            tree.insert("", "end", values=fila)
+
+        # Fila "Zj": Zj = (Zj - Cj) + Cj, usando lo que ya trae la tabla
+        # (la última fila de la tabla es, en todo momento, Zj - Cj).
+        fila_zj_tabla = tabla[-1]
+        valores_zj = [
+            f"{fila_zj_tabla[j] + costos_columnas[j]:.2f}" for j in range(num_columnas_variables)
+        ]
+        valores_zj.append(f"{fila_zj_tabla[-1]:.2f}")  # el "Zj" de la columna LD es el Z actual
+        tree.insert("", "end", values=["", "Zj"] + valores_zj, tags=("zj",))
+
+        # Fila "Cj - Zj": es lo contrario de lo que ya trae la tabla.
+        # Mientras haya un valor negativo aquí (o positivo en la tabla),
+        # el método sigue iterando.
+        valores_cj_menos_zj = [f"{-fila_zj_tabla[j]:.2f}" for j in range(num_columnas_variables)]
+        valores_cj_menos_zj.append("")
+        tree.insert("", "end", values=["", "Cj - Zj"] + valores_cj_menos_zj, tags=("cj_menos_zj",))
+
+        tree.tag_configure("cj", background="#eef3fb")
+        tree.tag_configure("zj", background="#fbf3e6")
+        tree.tag_configure("cj_menos_zj", background="#fbe6e6")
+
+        tree.pack(fill="both", expand=True, padx=5, pady=5)
+
+
 # =====================================================================
-# 6. PUNTO DE ENTRADA
+# 7. PUNTO DE ENTRADA
 # =====================================================================
 
 if __name__ == "__main__":
