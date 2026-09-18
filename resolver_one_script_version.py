@@ -1,28 +1,3 @@
-"""
-Resolvedor de Programación Lineal - Método Gráfico, Simplex y Gran M
-=====================================================================
-Aplicación de escritorio en Python (Tkinter + Matplotlib) para resolver
-problemas de programación lineal:
-  - Método gráfico: 2 variables de decisión, maximización o minimización.
-  - Método simplex: solo maximización, restricciones "<=".
-  - Método Gran M: maximización o minimización, restricciones "<=", ">=" o "=".
-    Es el método más general: agrega variables artificiales "castigadas"
-    con un costo muy alto (M) para poder resolver cualquier combinación
-    de restricciones.
-
-Este archivo contiene toda la aplicación en un solo módulo (entregable).
-Está organizado en las mismas secciones que el proyecto original en
-varios archivos, para que sea fácil de ubicar y explicar:
-
-  1. MODELOS DE DATOS      -> clases Restriccion y ProblemaPL
-  2. VALIDACIONES          -> reglas para habilitar cada método
-  3. LÓGICA MÉTODO GRÁFICO -> cálculo de región factible y óptimo
-  4. LÓGICA MÉTODO SIMPLEX -> tabla simplex e iteraciones
-  5. LÓGICA MÉTODO GRAN M  -> tabla con variables artificiales e iteraciones
-  6. INTERFAZ GRÁFICA      -> las ventanas de la aplicación
-  7. PUNTO DE ENTRADA      -> arranque de la app
-"""
-
 import tkinter as tk
 from tkinter import messagebox, ttk
 from dataclasses import dataclass, field
@@ -31,20 +6,9 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 
-
-# =====================================================================
-# 1. MODELOS DE DATOS
-# =====================================================================
-
 @dataclass
 class Restriccion:
-    """
-    Representa una restricción del problema de programación lineal.
-
-    coeficientes: lista de coeficientes de las variables, ej. [a1, a2] para a1*x1 + a2*x2
-    operador: "<=", ">=" o "="
-    termino_independiente: valor al lado derecho de la restricción (b)
-    """
+ 
     coeficientes: list
     operador: str
     termino_independiente: float
@@ -59,13 +23,7 @@ class Restriccion:
 
 @dataclass
 class ProblemaPL:
-    """
-    Representa el problema completo de programación lineal.
 
-    tipo_optimizacion: "max" o "min"
-    funcion_objetivo: lista de coeficientes, ej. [c1, c2] para Z = c1*x1 + c2*x2
-    restricciones: lista de objetos Restriccion
-    """
     tipo_optimizacion: str
     funcion_objetivo: list
     restricciones: list = field(default_factory=list)
@@ -83,33 +41,20 @@ class ProblemaPL:
         return len(self.restricciones)
 
 
-# =====================================================================
-# 2. VALIDACIONES
-# =====================================================================
-# El usuario elige el método (gráfico, simplex o Gran M) desde la
-# interfaz; estas funciones validan si esa elección es válida según las
-# características del problema ingresado.
-
 GRAFICO = "grafico"
 SIMPLEX = "simplex"
 GRAN_M = "gran_m"
 
 
 def validar_para_grafico(problema):
-    """
-    Valida que el problema cumpla los requisitos del método gráfico.
-    Devuelve (True, "") si es válido, o (False, mensaje_error) si no.
-    """
+ 
     if problema.num_variables != 2:
         return False, "El método gráfico requiere exactamente 2 variables (x1 y x2)."
     return True, ""
 
 
 def validar_para_simplex(problema):
-    """
-    Valida que el problema cumpla los requisitos del método simplex.
-    Devuelve (True, "") si es válido, o (False, mensaje_error) si no.
-    """
+
     if problema.tipo_optimizacion != "max":
         return False, "El método simplex en esta aplicación solo admite maximización."
     if problema.num_restricciones < 2:
@@ -118,46 +63,23 @@ def validar_para_simplex(problema):
 
 
 def validar_para_gran_m(problema):
-    """
-    Valida que el problema cumpla los requisitos del método Gran M.
-    Es el método más general de la aplicación: admite maximizar o
-    minimizar, y restricciones "<=", ">=" o "=", así que solo se exige
-    que haya al menos una restricción.
-    Devuelve (True, "") si es válido, o (False, mensaje_error) si no.
-    """
+   
     if problema.num_restricciones < 1:
         return False, "El método Gran M requiere al menos 1 restricción."
     return True, ""
 
-
-# =====================================================================
-# 3. LÓGICA MÉTODO GRÁFICO
-# =====================================================================
-# Pasos: (1) calcular cruces entre rectas, (2) filtrar los que cumplen
-# todas las restricciones (vértices factibles), (3) evaluar Z en cada
-# vértice, (4) elegir el mejor.
-
 def resolver_metodo_grafico(problema):
-    """
-    Resuelve un problema de programación lineal de 2 variables.
-    Devuelve un diccionario con la región factible, el punto óptimo y su valor de Z.
-    """
-    # Agregamos los ejes x1=0 y x2=0 como si fueran restricciones más,
-    # porque las variables de decisión no pueden ser negativas.
-    rectas = list(problema.restricciones)
+    
     rectas.append(Restriccion([1, 0], "=", 0))  # eje x1 = 0
     rectas.append(Restriccion([0, 1], "=", 0))  # eje x2 = 0
 
-    # Paso 1: calcular el cruce entre cada par de rectas
+   
     cruces = []
     for i in range(len(rectas)):
         for j in range(i + 1, len(rectas)):
             punto = _cruce_de_dos_rectas(rectas[i], rectas[j])
             if punto is not None:
                 cruces.append(punto)
-
-    # Paso 2: quedarnos solo con los puntos que cumplen TODAS las
-    # restricciones originales (esos son los vértices de la región factible)
     vertices = []
     for punto in cruces:
         x1, x2 = punto
@@ -171,7 +93,7 @@ def resolver_metodo_grafico(problema):
     if not vertices:
         raise ValueError("No existe una región factible para este problema.")
 
-    # Pasos 3 y 4: evaluar Z en cada vértice y quedarnos con el mejor
+    
     mejor_punto, mejor_valor = vertices[0], _evaluar_z(problema, vertices[0])
     for punto in vertices[1:]:
         valor = _evaluar_z(problema, punto)
@@ -188,7 +110,6 @@ def resolver_metodo_grafico(problema):
 
 
 def _cruce_de_dos_rectas(r1, r2):
-    """Calcula dónde se cruzan dos rectas a1*x1 + b1*x2 = c1 y a2*x1 + b2*x2 = c2."""
     a1, b1 = r1.coeficientes
     c1 = r1.termino_independiente
     a2, b2 = r2.coeficientes
@@ -196,7 +117,7 @@ def _cruce_de_dos_rectas(r1, r2):
 
     denominador = a1 * b2 - a2 * b1
     if abs(denominador) < 1e-9:
-        return None  # rectas paralelas: no se cruzan en un solo punto
+        return None 
 
     x1 = (c1 * b2 - c2 * b1) / denominador
     x2 = (a1 * c2 - a2 * c1) / denominador
@@ -204,7 +125,6 @@ def _cruce_de_dos_rectas(r1, r2):
 
 
 def _cumple_restriccion(restriccion, punto):
-    """Revisa si el punto (x1, x2) cumple una restricción dada."""
     valor = restriccion.coeficientes[0] * punto[0] + restriccion.coeficientes[1] * punto[1]
     tolerancia = 1e-6
     if restriccion.operador == "<=":
@@ -230,19 +150,8 @@ def _quitar_puntos_repetidos(puntos):
     return unicos
 
 
-# =====================================================================
-# 4. LÓGICA MÉTODO SIMPLEX
-# =====================================================================
-# Pasos: (1) armar tabla inicial con variables de holgura, (2) iterar
-# mientras la fila Z tenga negativos (entra/sale de la base, pivoteo),
-# (3) leer la solución final de la tabla.
-
 def resolver_metodo_simplex(problema, max_iteraciones=50):
-    """
-    Resuelve un problema de maximización con restricciones "<=" por método simplex.
-    Devuelve un diccionario con las tablas de cada paso, su explicación,
-    y la solución óptima final.
-    """
+ 
     if problema.tipo_optimizacion != "max":
         raise ValueError("El método simplex en esta aplicación solo admite maximización.")
 
@@ -254,7 +163,6 @@ def resolver_metodo_simplex(problema, max_iteraciones=50):
         + ["LD"]
     )
 
-    # Paso 1: armar la tabla inicial
     tabla = []
     variables_basicas = []
     for i, restriccion in enumerate(problema.restricciones):
@@ -278,7 +186,6 @@ def resolver_metodo_simplex(problema, max_iteraciones=50):
         f"La base inicial es: {', '.join(variables_basicas)}."
     ]
 
-    # Paso 2: iterar mientras la fila Z tenga negativos
     contador = 0
     while any(v < -1e-9 for v in tabla[-1][:-1]):
         contador += 1
@@ -297,7 +204,6 @@ def resolver_metodo_simplex(problema, max_iteraciones=50):
         iteraciones.append(_copiar(tabla))
         descripciones.append(f"Iteración {contador}: entra {entra} a la base, sale {sale}.")
 
-    # Paso 3: leer la solución final desde la tabla
     solucion = {f"x{i+1}": 0 for i in range(num_vars)}
     for i, variable in enumerate(variables_basicas):
         if variable in solucion:
@@ -317,7 +223,6 @@ def resolver_metodo_simplex(problema, max_iteraciones=50):
 
 
 def _fila_con_menor_razon(tabla, columna):
-    """Prueba de la razón mínima: elige qué variable sale de la base."""
     mejor_fila, mejor_razon = None, None
     for i in range(len(tabla) - 1):
         coef = tabla[i][columna]
@@ -329,7 +234,6 @@ def _fila_con_menor_razon(tabla, columna):
 
 
 def _pivotear(tabla, fila_pivote, columna_pivote):
-    """Deja 1 en la posición pivote y 0 en el resto de esa columna."""
     pivote = tabla[fila_pivote][columna_pivote]
     tabla[fila_pivote] = [v / pivote for v in tabla[fila_pivote]]
     for i in range(len(tabla)):
@@ -342,62 +246,29 @@ def _pivotear(tabla, fila_pivote, columna_pivote):
 
 
 def _copiar(tabla):
-    """Copia el estado actual de la tabla (para guardar el historial de pasos)."""
+
     return [fila[:] for fila in tabla]
 
 
-# =====================================================================
-# 5. LÓGICA MÉTODO GRAN M
-# =====================================================================
-# Este método admite maximizar o minimizar, y restricciones "<=", ">="
-# o "=". La idea es:
-#   - "<="  -> se agrega una variable de holgura (costo 0)
-#   - ">="  -> se agrega una variable de exceso (costo 0) y una
-#              variable artificial (costo -M)
-#   - "="   -> solo se agrega una variable artificial (costo -M)
-# Las variables artificiales no tienen significado real: solo sirven
-# para poder armar una base inicial (matriz identidad) y se "castigan"
-# con un costo enorme (M) para que el propio método las saque de la
-# base apenas pueda.
-#
-# Si el problema es de minimizar, se resuelve internamente como si
-# fuera de maximizar la función objetivo con el signo cambiado, y al
-# final se vuelve a invertir el signo de Z (las variables x no cambian).
-#
-# Pasos: (1) decidir qué variables adicionales necesita cada
-# restricción, (2) armar la tabla inicial y su fila Z (como Zj - Cj),
-# (3) iterar con las mismas reglas del simplex normal (se reutilizan
-# _fila_con_menor_razon, _pivotear y _copiar), (4) revisar que ninguna
-# variable artificial haya quedado en la base, (5) leer la solución.
 
-VALOR_M_POR_DEFECTO = 1_000_000  # "M": número muy grande usado como castigo
+VALOR_M_POR_DEFECTO = 1_000_000
 
 
 def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteraciones=50):
-    """
-    Resuelve un problema de programación lineal (maximizar o minimizar),
-    con restricciones "<=", ">=" o "=", usando el método de la Gran M.
-    Devuelve un diccionario con las tablas de cada paso (junto con la
-    base y el costo de cada fila, para poder mostrar Cj/Cb/Zj), su
-    explicación, y la solución óptima final.
-    """
+  
     num_vars = problema.num_variables
     num_restricciones = problema.num_restricciones
 
-    # Si el problema es de minimizar, lo resolvemos como si fuera de
-    # maximizar la función objetivo contraria; al final se invierte Z.
     es_minimizacion = problema.tipo_optimizacion == "min"
     funcion_objetivo_max = (
         [-c for c in problema.funcion_objetivo] if es_minimizacion
         else list(problema.funcion_objetivo)
     )
 
-    # Paso 1: decidir las columnas adicionales (holgura/exceso/artificial)
-    # que necesita cada restricción, y cuál es su variable básica inicial.
     nombres_columnas_extra = []
     costos_extra = []
     variables_basicas = []
-    columnas_por_restriccion = []  # una entrada por restricción: {nombre_columna: valor}
+    columnas_por_restriccion = []  
 
     for i, restriccion in enumerate(problema.restricciones):
         if restriccion.termino_independiente < 0:
@@ -433,9 +304,9 @@ def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteracione
         columnas_por_restriccion.append(columnas_de_esta_restriccion)
 
     nombres_columnas = [f"x{i+1}" for i in range(num_vars)] + nombres_columnas_extra + ["LD"]
-    costos_columnas = list(funcion_objetivo_max) + costos_extra  # sin contar "LD"
+    costos_columnas = list(funcion_objetivo_max) + costos_extra 
 
-    # Paso 2: armar la tabla inicial (una fila por restricción)
+
     tabla = []
     for i, restriccion in enumerate(problema.restricciones):
         fila = list(restriccion.coeficientes)
@@ -444,12 +315,9 @@ def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteracione
         fila.append(restriccion.termino_independiente)
         tabla.append(fila)
 
-    # Paso 3: calcular la fila Z inicial como Zj - Cj (misma convención que
-    # el método simplex normal), usando el costo real de la base inicial
-    # (0 para holgura/exceso, -M para las variables artificiales).
     costos_por_nombre = dict(zip(nombres_columnas[:-1], costos_columnas))
     costos_basicos = [costos_por_nombre[variable] for variable in variables_basicas]
-    num_columnas_variables = len(nombres_columnas) - 1  # sin contar "LD"
+    num_columnas_variables = len(nombres_columnas) - 1  
 
     fila_z = []
     for j in range(num_columnas_variables):
@@ -467,7 +335,6 @@ def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteracione
         f"La base inicial es: {', '.join(variables_basicas)}."
     ]
 
-    # Paso 4: iterar con las mismas reglas del simplex normal
     contador = 0
     while any(v < -1e-6 for v in tabla[-1][:-1]):
         contador += 1
@@ -487,8 +354,7 @@ def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteracione
         bases_por_iteracion.append(list(variables_basicas))
         descripciones.append(f"Iteración {contador}: entra {entra} a la base, sale {sale}.")
 
-    # Paso 5: si alguna variable artificial quedó en la base con un valor
-    # mayor a cero, el problema original no tiene solución factible.
+
     for i, variable in enumerate(variables_basicas):
         if variable.startswith("a") and abs(tabla[i][-1]) > 1e-6:
             raise ValueError(
@@ -496,7 +362,6 @@ def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteracione
                 f"'{variable}' quedó en la base con un valor mayor a cero."
             )
 
-    # Paso 6: leer la solución final desde la tabla
     solucion = {f"x{i+1}": 0 for i in range(num_vars)}
     for i, variable in enumerate(variables_basicas):
         if variable in solucion:
@@ -504,7 +369,7 @@ def resolver_metodo_gran_m(problema, valor_m=VALOR_M_POR_DEFECTO, max_iteracione
 
     valor_optimo = tabla[-1][-1]
     if es_minimizacion:
-        valor_optimo = -valor_optimo  # se deshace el cambio de signo del inicio
+        valor_optimo = -valor_optimo 
 
     texto_solucion = ", ".join(f"{v}={val:.2f}" for v, val in solucion.items())
     descripciones.append(f"Solución óptima: {texto_solucion}, con Z = {valor_optimo:.2f}.")
